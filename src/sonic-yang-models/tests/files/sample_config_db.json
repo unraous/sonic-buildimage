@@ -3371,26 +3371,27 @@
             }
         },
         "ISIS_GLOBALS": {
-            "default": {
-                "enabled": "true",
+            "default|CORE": {
                 "net_title": "49.0001.1921.6800.0001.00",
                 "level": "level-1-2",
-                "dynamic_hostname": "true"
-            }
-        },
-        "ISIS_GLOBALS_TIMERS": {
-            "default": {
-                "lsp_mtu": "1492",
-                "lsp_refresh_interval": "900",
-                "lsp_lifetime": "1200"
+                "dynamic_hostname": "true",
+                "lsp_mtu": "1497",
+                "lsp_refresh_interval_level_1": "900",
+                "lsp_lifetime_level_1": "1200"
             }
         },
         "ISIS_INTERFACE": {
-            "Ethernet0": {
-                "enabled": "true",
-                "metric": "10",
-                "circuit_type": "p2p",
+            "default|Ethernet0": {
+                "instance_name": "CORE",
+                "ipv4_enabled": "true",
+                "metric_level_1": "10",
+                "network_type": "p2p",
                 "passive": "false"
+            }
+        },
+        "ISIS_REDISTRIBUTE": {
+            "default|CORE|ipv4|connected|level-2|0": {
+                "metric": "0"
             }
         }
     },

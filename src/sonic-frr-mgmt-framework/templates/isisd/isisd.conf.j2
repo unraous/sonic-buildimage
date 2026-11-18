@@ -1,110 +1,91 @@
-! IS-IS configuration using config DB tables
+! IS-IS: FRR 10.7.1, three ConfigDB tables
+{% set globals = ISIS_GLOBALS|default({}) %}
+{% set interfaces = ISIS_INTERFACE|default({}) %}
+{% set policies = ISIS_REDISTRIBUTE|default({}) %}
+{% set levels = {'level-1': [1], 'level-2': [2], 'level-1-2': [1, 2]} %}
+{% set frr_levels = {'level-1': 'level-1', 'level-2': 'level-2-only', 'level-1-2': 'level-1-2'} %}
+{% for key, row in globals|dictsort %}
+{% set parts = key.split('|') if key is string else key %}
+{% set vrf, instance = parts %}
 !
-
-{# --- ISIS Global Configuration --- #}
-{% if ISIS_GLOBALS is defined and ISIS_GLOBALS|length > 0 %}
-{% for (vrf, isis_global) in ISIS_GLOBALS.items() %}
-{% if isis_global.enabled|default("false")|string|lower == "true" %}
+router isis {{ instance }}{{ ' vrf ' ~ vrf if vrf != 'default' else '' }}
+ metric-style wide
+{% if row.net_title is defined %}
+ net {{ row.net_title }}
+{% endif %}
+ is-type {{ frr_levels[row.level|default('level-1-2')] }}
+ {{ '' if row.dynamic_hostname|default('true')|string|lower == 'true' else 'no ' }}hostname dynamic
+ lsp-mtu {{ row.lsp_mtu|default(1497) }}
+ {{ '' if row.ipv6_multi_topology|default('false')|string|lower == 'true' else 'no ' }}topology ipv6-unicast
+ {{ '' if row.overload|default('false')|string|lower == 'true' else 'no ' }}set-overload-bit
+{% if row.overload_on_startup|default(0)|int > 0 %}
+ set-overload-bit on-startup {{ row.overload_on_startup }}
+{% else %}
+ no set-overload-bit on-startup
+{% endif %}
+{% for n in [1, 2] %}
+{% set suffix = '_level_' ~ n %}
+ lsp-timers level-{{ n }} gen-interval {{ row.get('lsp_generation_interval' ~ suffix, 30) }} refresh-interval {{ row.get('lsp_refresh_interval' ~ suffix, 900) }} max-lifetime {{ row.get('lsp_lifetime' ~ suffix, 1200) }}
+ spf-interval level-{{ n }} {{ row.get('spf_minimum_interval' ~ suffix, 1) }}
+{% endfor %}
+{% if row.spf_init_delay is defined %}
+ spf-delay-ietf init-delay {{ row.spf_init_delay }} short-delay {{ row.spf_short_delay }} long-delay {{ row.spf_long_delay }} holddown {{ row.spf_hold_down }} time-to-learn {{ row.spf_time_to_learn }}
+{% else %}
+ no spf-delay-ietf
+{% endif %}
+{% endfor %}
+{% for key, row in interfaces|dictsort %}
+{% set parts = key.split('|') if key is string else key %}
+{% set vrf, ifname = parts %}
+{% set parent = globals.get((vrf, row.instance_name), globals.get(vrf ~ '|' ~ row.instance_name, {})) %}
+{% set actual = namespace(vrf='default') %}
+{% for routed in [INTERFACE|default({}), PORTCHANNEL_INTERFACE|default({}), VLAN_INTERFACE|default({}), LOOPBACK_INTERFACE|default({}), VLAN_SUB_INTERFACE|default({})] %}
+{% if routed.get(ifname, {}).get('vrf_name') %}
+{% set actual.vrf = routed[ifname].vrf_name %}
+{% endif %}
+{% endfor %}
+{% set ipv4 = row.ipv4_enabled|default('false')|string|lower == 'true' %}
+{% set ipv6 = row.ipv6_enabled|default('false')|string|lower == 'true' %}
+{% if parent and actual.vrf == vrf and (ipv4 or ipv6) %}
+{% set effective = namespace(levels=[]) %}
+{% for n in levels[row.level|default('level-1-2')] %}
+{% if n in levels[parent.level|default('level-1-2')] %}
+{% set effective.levels = effective.levels + [n] %}
+{% endif %}
+{% endfor %}
+{% if effective.levels %}
 !
-{% if vrf == "default" %}
-router isis default
+interface {{ ifname }}{{ ' vrf ' ~ vrf if vrf != 'default' else '' }}
+{% if ipv4 %}
+ ip router isis {{ row.instance_name }}
+{% endif %}
+{% if ipv6 %}
+ ipv6 router isis {{ row.instance_name }}
+{% endif %}
+ isis circuit-type {{ 'level-1-2' if effective.levels|length == 2 else ('level-1' if effective.levels[0] == 1 else 'level-2-only') }}
+ {{ '' if row.passive|default('false')|string|lower == 'true' else 'no ' }}isis passive
+ {{ '' if row.network_type|default('lan') == 'p2p' else 'no ' }}isis network point-to-point
+{% for field in ['metric', 'hello_interval', 'hello_multiplier'] %}
+{% for n in [1, 2] %}
+{% set field_name = field ~ '_level_' ~ n %}
+{% if field_name in row %}
+ isis {{ field|replace('_', '-') }} level-{{ n }} {{ row[field_name] }}
 {% else %}
-router isis {{ vrf }} vrf {{ vrf }}
+ no isis {{ field|replace('_', '-') }} level-{{ n }}
 {% endif %}
-{% if isis_global.ipv6_multi_topology|default("true")|string|lower == "true" %}
- topology ipv6-unicast
-{% else %}
- no topology ipv6-unicast
-{% endif %}
-{% if isis_global.net_title is defined %}
- net {{ isis_global.net_title }}
-{% endif %}
-{% if isis_global.level is defined %}
-{% if isis_global.level == "level-1" %}
- is-type level-1
-{% elif isis_global.level == "level-2" %}
- is-type level-2-only
-{% elif isis_global.level == "level-1-2" %}
- is-type level-1-2
-{% endif %}
-{% endif %}
-{% if isis_global.dynamic_hostname is defined %}
-{% if isis_global.dynamic_hostname|string|lower == "true" %}
- hostname dynamic
-{% elif isis_global.dynamic_hostname|string|lower == "false" %}
- no hostname dynamic
-{% endif %}
-{% endif %}
-{# Include timers if present for this VRF #}
-{% if ISIS_GLOBALS_TIMERS is defined and ISIS_GLOBALS_TIMERS[vrf] is defined %}
-{% set timers = ISIS_GLOBALS_TIMERS[vrf] %}
-{% if timers.lsp_mtu is defined %}
- lsp-mtu {{ timers.lsp_mtu }}
-{% endif %}
-{% if timers.lsp_lifetime|default(1200)|int >= 1200 %}
-{% if timers.lsp_lifetime is defined %}
- max-lsp-lifetime {{ timers.lsp_lifetime }}
-{% endif %}
-{% if timers.lsp_refresh_interval is defined %}
- lsp-refresh-interval {{ timers.lsp_refresh_interval }}
-{% endif %}
-{% else %}
-{% if timers.lsp_refresh_interval is defined %}
- lsp-refresh-interval {{ timers.lsp_refresh_interval }}
-{% endif %}
-{% if timers.lsp_lifetime is defined %}
- max-lsp-lifetime {{ timers.lsp_lifetime }}
-{% endif %}
-{% endif %}
+{% endfor %}
+{% endfor %}
 {% endif %}
 {% endif %}
 {% endfor %}
-{% endif %}
-
-{# --- ISIS Interface Configuration --- #}
-{% if ISIS_INTERFACE is defined and ISIS_INTERFACE|length > 0 %}
-{% for (ifname, isis_intf) in ISIS_INTERFACE.items() %}
+{% for key, row in policies|dictsort %}
+{% set parts = key.split('|') if key is string else key %}
+{% set vrf, instance, af, source, level, table_id = parts %}
+{% if (vrf, instance) in globals or (vrf ~ '|' ~ instance) in globals %}
 !
-interface {{ ifname }}
- {# Determine VRF for this interface #}
-{% set vrf_name = "default" %}
-{% if INTERFACE is defined and INTERFACE[ifname] is defined and INTERFACE[ifname].vrf_name is defined %}
-{% set vrf_name = INTERFACE[ifname].vrf_name %}
-{% elif PORTCHANNEL_INTERFACE is defined and PORTCHANNEL_INTERFACE[ifname] is defined and PORTCHANNEL_INTERFACE[ifname].vrf_name is defined %}
-{% set vrf_name = PORTCHANNEL_INTERFACE[ifname].vrf_name %}
-{% elif VLAN_INTERFACE is defined and VLAN_INTERFACE[ifname] is defined and VLAN_INTERFACE[ifname].vrf_name is defined %}
-{% set vrf_name = VLAN_INTERFACE[ifname].vrf_name %}
-{% elif LOOPBACK_INTERFACE is defined and LOOPBACK_INTERFACE[ifname] is defined and LOOPBACK_INTERFACE[ifname].vrf_name is defined %}
-{% set vrf_name = LOOPBACK_INTERFACE[ifname].vrf_name %}
-{% elif VLAN_SUB_INTERFACE is defined and VLAN_SUB_INTERFACE[ifname] is defined and VLAN_SUB_INTERFACE[ifname].vrf_name is defined %}
-{% set vrf_name = VLAN_SUB_INTERFACE[ifname].vrf_name %}
-{% endif %}
-{% if ISIS_GLOBALS is defined and ISIS_GLOBALS[vrf_name] is defined and
-      ISIS_GLOBALS[vrf_name].enabled|default("false")|string|lower == "true" and
-      isis_intf.enabled|default("false")|string|lower == "true" %}
-{% set ipv4_enabled = isis_intf.ipv4_enabled|default("true")|string|lower == "true" %}
-{% set ipv6_enabled = isis_intf.ipv6_enabled|default("true")|string|lower == "true" %}
-{% if ipv4_enabled or ipv6_enabled %}
-{% if ipv4_enabled %}
- ip router isis {{ vrf_name }}
-{% endif %}
-{% if ipv6_enabled %}
- ipv6 router isis {{ vrf_name }}
-{% endif %}
-{% if isis_intf.passive is defined and isis_intf.passive|string|lower == "true" %}
- isis passive
-{% endif %}
-{% if isis_intf.metric is defined %}
- isis metric {{ isis_intf.metric }}
-{% endif %}
-{% if isis_intf.circuit_type is defined %}
-{% if isis_intf.circuit_type == "p2p" %}
- isis network point-to-point
-{% elif isis_intf.circuit_type == "lan" %}
- no isis network point-to-point
-{% endif %}
-{% endif %}
-{% endif %}
+router isis {{ instance }}{{ ' vrf ' ~ vrf if vrf != 'default' else '' }}
+{% set route_maps = row.route_map|default([]) %}
+{% set route_map = route_maps if route_maps is string else route_maps|first|default('') %}
+ redistribute {{ af }} {{ source }}{{ ' ' ~ table_id if source == 'table' else '' }} {{ level }} metric {{ row.metric|default(0) }}{{ ' route-map ' ~ route_map if route_map else '' }}
 {% endif %}
 {% endfor %}
-{% endif %}
